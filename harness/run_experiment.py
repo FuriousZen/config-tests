@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -50,24 +51,34 @@ def load_tasks() -> list[dict]:
 
 def pre_index(config_name: str, workdir: Path, mcp_runtime: dict) -> str:
     """Best-effort: populate the memory/graph for a memory config before the
-    timed run. Returns a short status string. Never fatal."""
+    timed run, using each server's documented CLI. Returns a short status string;
+    never fatal. State is isolated per-run via the same env the MCP server gets.
+
+    - codebase-memory: `<bin> cli index_repository '{"repo_path":"<ABS>"}'`
+      (repo_path must be absolute), state under CBM_CACHE_DIR.
+    - codegraphcontext: `<bin> index .` run with cwd=workdir (docs index the
+      current dir), state isolated by overriding HOME (no documented data-dir var).
+    """
     rt = mcp_runtime.get(config_name)
     if not rt:
         return "skipped (mcp not installed)"
     bin0 = rt["command"][0]
-    if config_name == "codegraphcontext":
-        env = {"CODEGRAPHCONTEXT_HOME": str(workdir / ".cgc-home")}
-        return _try(["env", *[f"{k}={v}" for k, v in env.items()], bin0, "index", str(workdir)])
     if config_name == "codebase-memory":
         env = {"CBM_CACHE_DIR": str(workdir / ".cbm-cache")}
-        # DeusData binary may expose a CLI index; if not, the agent indexes in-session.
-        return _try(["env", *[f"{k}={v}" for k, v in env.items()], bin0, "index", str(workdir)])
+        args = json.dumps({"repo_path": str(workdir)})
+        return _try([bin0, "cli", "index_repository", args], env=env)
+    if config_name == "codegraphcontext":
+        env = {"HOME": str(workdir / ".cgc-home")}
+        (workdir / ".cgc-home").mkdir(parents=True, exist_ok=True)
+        return _try([bin0, "index", "."], env=env, cwd=workdir)
     return "n/a"
 
 
-def _try(cmd: list[str]) -> str:
+def _try(cmd: list[str], env: dict | None = None, cwd: Path | None = None) -> str:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        run_env = {**os.environ, **(env or {})}
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                           env=run_env, cwd=str(cwd) if cwd else None)
         return "ok" if r.returncode == 0 else f"index-cli-unavailable (rc={r.returncode}); agent indexes in-session"
     except Exception as e:
         return f"index error: {e}"
@@ -103,8 +114,16 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
 
     (cell_dir / "diff.patch").write_text(lib.git_diff(workdir))
 
-    mcp_hints = ["codebase-memory", "codegraphcontext", "index_repository",
-                 "query", "graph", "memory", "callers", "find_"]
+    # Substrings that flag an MCP-provided tool call (from both servers' docs).
+    mcp_hints = [
+        "codebase-memory", "codegraphcontext",
+        # codebase-memory tool names
+        "index_repository", "search_graph", "query_graph", "trace_path",
+        "search_code", "get_code_snippet", "get_architecture", "get_graph_schema",
+        "index_status", "list_projects",
+        # codegraphcontext / generic graph-nav signals
+        "graph", "callers", "find_", "memory", "query",
+    ]
     metrics = lib.extract_metrics(run, export_path, mcp_hints)
     metrics_d = metrics.asdict()
     metrics_d.update(model=model["slug"], model_id=model["id"], config=config_name,

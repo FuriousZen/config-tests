@@ -70,8 +70,11 @@ def build_opencode_config(
     """
     # Per-run, per-MCP env isolation so accumulated state can't leak across reps.
     per_run_env = {
+        # codebase-memory documents CBM_CACHE_DIR as its full storage override.
         "codebase-memory": {"CBM_CACHE_DIR": str(workdir / ".cbm-cache")},
-        "codegraphcontext": {"CODEGRAPHCONTEXT_HOME": str(workdir / ".cgc-home")},
+        # codegraphcontext documents no data-dir override, so isolate everything it
+        # writes under ~/ (embedded FalkorDB/Kuzu DB + ~/.codegraphcontext) via HOME.
+        "codegraphcontext": {"HOME": str(workdir / ".cgc-home")},
     }
     mcp: dict[str, Any] = {}
     for key in MCP_KEYS:

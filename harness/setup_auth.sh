@@ -34,13 +34,20 @@ os.chmod(path, 0o600)
 print(f"[auth] wrote nvidia credential to {path}")
 PY
 
-# Quick, non-fatal connectivity check.
+# Quick, non-fatal connectivity check. MUST NOT be able to block the build:
+# - `--format json` forces machine output (the default renderer expects a TTY,
+#   which postCreate doesn't have, and would otherwise block).
+# - `timeout` caps it so a slow/hung call can never stall the container build.
 if command -v opencode >/dev/null 2>&1; then
-  echo "[auth] verifying NIM auth (a tiny probe call)…"
-  if opencode run "say: ok" -m nvidia/google/gemma-4-31b-it --pure \
-       --dangerously-skip-permissions >/dev/null 2>&1; then
+  echo "[auth] verifying NIM auth (tiny probe, 45s cap)…"
+  if timeout 45 opencode run "say ok" -m nvidia/google/gemma-4-31b-it \
+       --pure --format json --dangerously-skip-permissions \
+       >/tmp/nim-probe.json 2>/dev/null \
+     && [ -s /tmp/nim-probe.json ] \
+     && ! grep -q '"type":"error"' /tmp/nim-probe.json; then
     echo "[auth] NIM auth OK."
   else
-    echo "[auth] WARNING: probe call failed — key may be invalid/expired (401)." >&2
+    echo "[auth] NOTE: probe inconclusive (timeout/empty/401). auth.json is" >&2
+    echo "[auth] already written — verify directly with: opencode auth list" >&2
   fi
 fi
