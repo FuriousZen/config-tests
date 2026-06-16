@@ -1,0 +1,5 @@
+{
+  "title": "Add archive-task feature across the full stack",
+  "fixture": "react-app",
+  "rubric": "Full credit requires all layers wired coherently: archived field (defaulted in createTask), archiveTask service fn, ARCHIVE_TASK action + reducer case, selectActiveTasks selector, selectVisibleTasks excluding archived, context handler + useTasks exposure, and an Archive Button in TaskCard calling it. Penalize layers left unconnected (e.g. a selector nothing uses, or a button with no handler). Consistent style and any sensible tests are a plus."
+}

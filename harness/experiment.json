@@ -1,0 +1,22 @@
+{
+  "_comment": "Single source of truth for the OpenCode MCP-config experiment. Edit models/configs/reps here.",
+
+  "models": [
+    { "slug": "gemma-4-31b",      "id": "nvidia/google/gemma-4-31b-it" },
+    { "slug": "gpt-oss-120b",     "id": "nvidia/openai/gpt-oss-120b" },
+    { "slug": "nemotron-3-ultra", "id": "nvidia/nvidia/nemotron-3-ultra-550b-a55b" }
+  ],
+
+  "configs": ["control", "codebase-memory", "codegraphcontext"],
+
+  "reps": 3,
+
+  "//judge_model": "Neutral grader, NOT one of the models under test (avoid self-eval bias). deepseek-v4-pro is strong and not in the matrix.",
+  "judge_model": "nvidia/deepseek-ai/deepseek-v4-pro",
+
+  "//timeout_seconds": "Hard wall-clock cap per session; a hung/looping run is killed and recorded as errored rather than blocking the batch.",
+  "timeout_seconds": 900,
+
+  "//pre_index": "For the two memory MCPs, index the fixture before the timed task so query tools have data to return (single fresh session can't accumulate memory otherwise).",
+  "pre_index": true
+}

@@ -1,0 +1,13 @@
+# Secrets — never commit the real NIM key
+.devcontainer/.env
+
+# Harness-generated runtime + outputs
+harness/mcp_runtime.json
+harness/.venv-cgc/
+results/
+
+# Node / Python / OS cruft
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store

@@ -1,0 +1,5 @@
+{
+  "title": "Fix selectTasksByStatus ignoring its status argument",
+  "fixture": "react-app",
+  "rubric": "Full credit requires: selectTasksByStatus filters by the passed status (not hardcoded 'todo'); a new test in __tests__/store/selectors.test.ts that fails under the old behavior and passes under the fix; no unrelated changes. Bonus awareness if the agent notes the downstream impact via selectVisibleTasks -> useTasks -> Board."
+}
