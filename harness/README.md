@@ -50,8 +50,34 @@ Useful flags: `--models`, `--configs`, `--tasks`, `--reps`, `--no-judge`.
 
 `results/<timestamp>/<model>__<config>__<task>__repN/`:
 `events.json` (JSONL stream) · `export.json` (authoritative session) ·
-`diff.patch` · `metrics.json` · `judge.json`. Plus `index.json` (all rows),
-`summary.csv`, and `summary.md` (3×3 per-metric tables with MCP lift vs control).
+`diff.patch` · `metrics.json` · `verify.json` · `judge.json`. Plus `index.json`
+(all rows), `summary.csv`, and `summary.md` (3×3 per-metric tables with MCP lift
+vs control).
+
+## Scoring (two layers)
+
+1. **Execution-based ground truth (headline `task_score`, 0–1)** — `verify.py`
+   runs *after* the session, so the agent never sees it:
+   - copies hidden vitest tests from `tasks/<id>/verify/` into the workspace's
+     gitignored `__tests__/__verify__/`,
+   - runs `tsc --noEmit` (hard gate) + `vitest` (scores **hidden** tests only, so
+     trivial agent-written tests can't inflate it) + static `checks` from
+     `task.json` (e.g. the refactor's "old name gone, new name present"),
+   - the Q&A task (no diff) scores answer-key coverage of the final message.
+   `task_score = 0` if typecheck fails, else mean of hidden-test and static-check
+   pass-fractions. Toggle with `run_verify` in `experiment.json`.
+2. **LLM judge (secondary, grounded)** — the judge is shown the verify summary
+   ("typecheck PASS, hidden tests 7/8…") so it can't praise broken code; it rates
+   qualitative axes and stays primary only for the Q&A task.
+
+Requires Node + the fixture's `node_modules` (the devcontainer installs it; each
+workspace **symlinks** it rather than copying 108×).
+
+## Adding a task with execution checks
+
+Drop `tasks/<id>/verify/*.test.ts` (hidden tests) and/or add to `task.json`:
+`checks` (`[{pattern, mode: must_exist|must_not_exist, glob}]`) for static
+assertions, or `answer_key` (`[string,…]`) for a no-diff Q&A task.
 
 ## Tuning
 

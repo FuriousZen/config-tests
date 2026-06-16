@@ -31,7 +31,7 @@ Respond with ONLY a single JSON object, no prose before or after:
 MAX_DIFF_CHARS = 24000
 
 
-def _final_agent_message(export_path: Path | None) -> str:
+def final_agent_message(export_path: Path | None) -> str:
     """Best-effort pull of the agent's last assistant text from export.json."""
     if not export_path or not export_path.exists():
         return ""
@@ -69,15 +69,19 @@ def _extract_json(text: str) -> dict:
 
 
 def judge_run(task: dict, diff_text: str, export_path: Path | None,
-              judge_model: str, out_path: Path) -> dict:
+              judge_model: str, out_path: Path, verify_summary: str = "") -> dict:
     diff = diff_text if len(diff_text) <= MAX_DIFF_CHARS else diff_text[:MAX_DIFF_CHARS] + "\n…[diff truncated]…"
-    final_msg = _final_agent_message(export_path)
+    final_msg = final_agent_message(export_path)
     rubric_extra = task.get("rubric", "")
 
+    # Ground the judge in deterministic results so it can't praise broken code.
+    ground = (f"==== GROUND TRUTH (trust this over your own reading) ====\n{verify_summary}\n\n"
+              if verify_summary else "")
     message = (
         f"{RUBRIC}\n"
         f"{('Extra rubric guidance for this task: ' + rubric_extra) if rubric_extra else ''}\n\n"
         f"==== TASK ====\n{task['title']}\n\n{task['prompt']}\n\n"
+        f"{ground}"
         f"==== RESULT: AGENT FINAL MESSAGE ====\n{final_msg or '(none)'}\n\n"
         f"==== RESULT: DIFF ====\n{diff or '(no changes were made)'}\n"
     )

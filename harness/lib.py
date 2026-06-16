@@ -112,11 +112,22 @@ def make_clean_workdir(fixture: Path, dest: Path) -> Path:
     """
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(fixture, dest, ignore=shutil.ignore_patterns(".git"))
-    # Keep harness artifacts out of the measured `git diff`.
+    # Skip .git (we make a fresh one) and node_modules (huge; we symlink it).
+    shutil.copytree(fixture, dest, ignore=shutil.ignore_patterns(".git", "node_modules"))
+    # Share the fixture's installed deps instead of copying them per run, so
+    # `tsc`/`vitest` (and the agent) can resolve them cheaply. Read-mostly; our
+    # tasks add no deps.
+    fixture_node_modules = fixture / "node_modules"
+    if fixture_node_modules.is_dir() and not (dest / "node_modules").exists():
+        try:
+            (dest / "node_modules").symlink_to(fixture_node_modules, target_is_directory=True)
+        except OSError:
+            pass  # symlink unsupported -> tsc/vitest just won't run; verify records that
+    # Keep harness artifacts + hidden verification assets out of the measured diff.
     (dest / ".gitignore").write_text(
         "\n".join([".gitignore", "opencode.json", ".opencode/", ".cbm-cache/",
-                   ".cgc-home/", "__pycache__/", "*.pyc"]) + "\n"
+                   ".cgc-home/", "node_modules/", "__tests__/__verify__/", ".verify/",
+                   "__pycache__/", "*.pyc"]) + "\n"
     )
     # Baseline repo so post-run `git diff --cached` shows only what the agent changed.
     subprocess.run(["git", "-C", str(dest), "init", "-q"], check=True)

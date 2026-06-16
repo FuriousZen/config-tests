@@ -1,5 +1,12 @@
 {
   "title": "Cross-file rename: taskService.getTasks() -> loadTasks()",
   "fixture": "react-app",
-  "rubric": "Full credit requires: the service function renamed at its definition AND every call site/import updated (AppContext.refresh and the service test at minimum), zero remaining references to getTasks, and api/tasks.fetchTasks left untouched. Penalize missed call sites or accidental renaming of the unrelated fetchTasks heavily."
+  "rubric": "Full credit requires: the service function renamed at its definition AND every call site/import updated (AppContext.refresh and the service test at minimum), zero remaining references to getTasks, and api/tasks.fetchTasks left untouched. Penalize missed call sites or accidental renaming of the unrelated fetchTasks heavily.",
+  "checks": [
+    { "pattern": "\\bloadTasks\\b", "mode": "must_exist", "glob": "app/services/taskService.ts" },
+    { "pattern": "loadTasks", "mode": "must_exist", "glob": "app/context/AppContext.tsx" },
+    { "pattern": "\\bgetTasks\\b", "mode": "must_not_exist", "glob": "app/**/*.ts*" },
+    { "pattern": "\\bgetTasks\\b", "mode": "must_not_exist", "glob": "__tests__/services/*.ts*" },
+    { "pattern": "\\bfetchTasks\\b", "mode": "must_exist", "glob": "app/api/tasks.ts" }
+  ]
 }

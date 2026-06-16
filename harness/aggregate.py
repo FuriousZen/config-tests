@@ -19,8 +19,9 @@ import lib
 
 # (column in index.json, pretty label, higher_is_better)
 METRICS = [
-    ("judge_overall", "Judge overall (1-5)", True),
-    ("judge_correctness", "Judge correctness", True),
+    ("task_score", "Task score (0-1, HEADLINE)", True),   # execution-based ground truth
+    ("verify_typecheck", "Typecheck pass-rate", True),
+    ("judge_overall", "Judge overall (1-5, secondary)", True),
     ("wall_seconds", "Wall seconds", False),
     ("total_tokens", "Total tokens", False),
     ("cost_usd", "Cost USD", False),

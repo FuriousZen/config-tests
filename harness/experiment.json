@@ -18,5 +18,8 @@
   "timeout_seconds": 900,
 
   "//pre_index": "For the two memory MCPs, index the fixture before the timed task so query tools have data to return (single fresh session can't accumulate memory otherwise).",
-  "pre_index": true
+  "pre_index": true,
+
+  "//run_verify": "Execution-based scoring (tsc + hidden vitest + static checks) -> deterministic task_score (headline). Set false for a fast judge-only pass. Requires Node + the fixture's node_modules in the container.",
+  "run_verify": true
 }

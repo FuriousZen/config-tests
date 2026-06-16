@@ -29,7 +29,8 @@ from datetime import datetime
 from pathlib import Path
 
 import lib
-from judge import judge_run
+import verify
+from judge import judge_run, final_agent_message
 
 
 def load_tasks() -> list[dict]:
@@ -129,6 +130,18 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
     metrics_d.update(model=model["slug"], model_id=model["id"], config=config_name,
                      task=task["id"], rep=rep, session_id=run.session_id,
                      pre_index=index_status)
+
+    # --- execution-based ground truth (headline score) ---
+    # Runs after the diff is captured; hidden tests land in a gitignored dir.
+    final_msg = final_agent_message(export_path)
+    verify_d = {}
+    if exp.get("run_verify", True) and not metrics.errored:
+        verify_d = verify.verify_task(task, workdir, final_msg)
+        (cell_dir / "verify.json").write_text(json.dumps(verify_d, indent=2))
+        metrics_d["task_score"] = verify_d.get("task_score")
+        metrics_d["verify"] = {k: verify_d.get(k) for k in
+                               ("kind", "typecheck", "hidden", "fullsuite", "checks",
+                                "answer_key", "skipped")}
     (cell_dir / "metrics.json").write_text(json.dumps(metrics_d, indent=2))
 
     judge_d = {}
@@ -139,17 +152,23 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
             export_path=export_path,
             judge_model=exp["judge_model"],
             out_path=cell_dir / "judge.json",
+            verify_summary=verify.summarize_for_judge(verify_d),
         )
     elif metrics.errored:
         (cell_dir / "judge.json").write_text(json.dumps(
             {"skipped": True, "reason": "session errored", "error": metrics.error_message}, indent=2))
 
     status = "ERR" if metrics.errored else ("TIMEOUT" if metrics.timed_out else "ok")
-    print(f"     {status}  {metrics.wall_seconds}s  in={metrics.input_tokens} out={metrics.output_tokens} "
-          f"cost=${metrics.cost_usd:.4f} tools={metrics.tool_calls} mcp={metrics.mcp_tool_calls} "
-          f"judge={judge_d.get('overall', '-')}", flush=True)
+    print(f"     {status}  {metrics.wall_seconds}s  task_score={metrics_d.get('task_score', '-')} "
+          f"in={metrics.input_tokens} out={metrics.output_tokens} cost=${metrics.cost_usd:.4f} "
+          f"tools={metrics.tool_calls} mcp={metrics.mcp_tool_calls} judge={judge_d.get('overall', '-')}",
+          flush=True)
 
     row = {**metrics_d, **{f"judge_{k}": v for k, v in judge_d.items()}}
+    row.pop("verify", None)  # keep the flat row clean; full detail lives in verify.json
+    if verify_d:
+        row["task_score"] = verify_d.get("task_score")
+        row["verify_typecheck"] = bool((verify_d.get("typecheck") or {}).get("passed"))
     return row
 
 

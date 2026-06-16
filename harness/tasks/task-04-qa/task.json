@@ -1,5 +1,10 @@
 {
   "title": "Trace control flow of creating a task via TaskForm (no code changes)",
   "fixture": "react-app",
-  "rubric": "Score the FINAL MESSAGE (no diff expected). Full credit requires the real call chain in order: TaskForm.handleSubmit -> validateTask -> useTasks.createTask -> AppContext.createTask -> taskService.addTask (-> validateTask again) -> api/tasks.createTask -> createId + now + api/client.apiPut -> dispatch UPSERT_TASK -> store/reducer -> notify, then re-render via useTasks -> selectVisibleTasks -> Board -> Column -> TaskCard. Penalize invented functions or skipped layers; reward correct file:symbol references."
+  "rubric": "Score the FINAL MESSAGE (no diff expected). Full credit requires the real call chain in order: TaskForm.handleSubmit -> validateTask -> useTasks.createTask -> AppContext.createTask -> taskService.addTask (-> validateTask again) -> api/tasks.createTask -> createId + now + api/client.apiPut -> dispatch UPSERT_TASK -> store/reducer -> notify, then re-render via useTasks -> selectVisibleTasks -> Board -> Column -> TaskCard. Penalize invented functions or skipped layers; reward correct file:symbol references.",
+  "answer_key": [
+    "handleSubmit", "validateTask", "useTasks", "AppContext", "createTask",
+    "addTask", "api/tasks", "createId", "apiPut", "UPSERT_TASK", "reducer",
+    "selectVisibleTasks", "Board", "Column", "TaskCard"
+  ]
 }
