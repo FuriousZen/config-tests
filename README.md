@@ -10,7 +10,7 @@ scorecard.
 
 |                | control | codebase-memory | codegraphcontext |
 |----------------|---------|-----------------|------------------|
-| gemma-4-31b    | …       | …               | …                |
+| mistral-small-4-119b | …   | …               | …                |
 | gpt-oss-120b   | …       | …               | …                |
 | nemotron-3-ultra | …     | …               | …                |
 

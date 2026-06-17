@@ -2,7 +2,7 @@
   "_comment": "Single source of truth for the OpenCode MCP-config experiment. Edit models/configs/reps here.",
 
   "models": [
-    { "slug": "gemma-4-31b",      "id": "nvidia/google/gemma-4-31b-it" },
+    { "slug": "mistral-small-4-119b", "id": "nvidia/mistralai/mistral-small-4-119b-2603" },
     { "slug": "gpt-oss-120b",     "id": "nvidia/openai/gpt-oss-120b" },
     { "slug": "nemotron-3-ultra", "id": "nvidia/nvidia/nemotron-3-ultra-550b-a55b" }
   ],

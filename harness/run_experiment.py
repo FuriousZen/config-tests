@@ -14,7 +14,7 @@ Artifacts land in results/<timestamp>/<model>__<config>__<task>__repN/.
 Usage:
   python harness/run_experiment.py                  # full matrix
   python harness/run_experiment.py --dry-run-one    # 1 cell, smoke test
-  python harness/run_experiment.py --models gemma-4-31b --configs control codebase-memory
+  python harness/run_experiment.py --models mistral-small-4-119b --configs control codebase-memory
   python harness/run_experiment.py --reps 1 --no-judge
 """
 from __future__ import annotations

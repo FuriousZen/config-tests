@@ -40,7 +40,7 @@ PY
 # - `timeout` caps it so a slow/hung call can never stall the container build.
 if command -v opencode >/dev/null 2>&1; then
   echo "[auth] verifying NIM auth (tiny probe, 45s cap)…"
-  if timeout 45 opencode run "say ok" -m nvidia/google/gemma-4-31b-it \
+  if timeout 45 opencode run "say ok" -m nvidia/mistralai/mistral-small-4-119b-2603 \
        --pure --format json --dangerously-skip-permissions \
        >/tmp/nim-probe.json 2>/dev/null \
      && [ -s /tmp/nim-probe.json ] \

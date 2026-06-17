@@ -9,7 +9,7 @@ scorecard.
 
 3 models × 3 configs × N tasks × 3 reps.
 
-- **Models** (`experiment.json`): `nvidia/google/gemma-4-31b-it`,
+- **Models** (`experiment.json`): `nvidia/mistralai/mistral-small-4-119b-2603`,
   `nvidia/openai/gpt-oss-120b`, `nvidia/nvidia/nemotron-3-ultra-550b-a55b`.
 - **Configs**: `control` (no experiment MCP), `codebase-memory`
   (DeusData/codebase-memory-mcp), `codegraphcontext` (PyPI).
@@ -24,7 +24,7 @@ scorecard.
 
 1. **Nvidia auth must work.** Verify with:
    ```
-   opencode run "say pong" -m nvidia/google/gemma-4-31b-it --pure --dangerously-skip-permissions
+   opencode run "say pong" -m nvidia/mistralai/mistral-small-4-119b-2603 --pure --dangerously-skip-permissions
    ```
    If this 401s, re-auth: `opencode auth login` → Nvidia → paste a valid key.
 2. **Install the MCP servers** (idempotent):
@@ -39,7 +39,7 @@ scorecard.
 ```
 python3 harness/run_experiment.py --dry-run-one          # 1-cell smoke test
 python3 harness/run_experiment.py --configs control codebase-memory codegraphcontext \
-        --models gemma-4-31b --tasks task-01-bugfix --reps 1   # small matrix
+        --models mistral-small-4-119b --tasks task-01-bugfix --reps 1   # small matrix
 python3 harness/run_experiment.py                        # full matrix
 python3 harness/aggregate.py results/<timestamp>         # summary.csv + summary.md
 ```
