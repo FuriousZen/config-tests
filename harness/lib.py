@@ -319,7 +319,6 @@ class Metrics:
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_usd: float = 0.0
     tool_calls: int = 0
     mcp_tool_calls: int = 0
     assistant_turns: int = 0
@@ -332,23 +331,23 @@ class Metrics:
         return {**self.__dict__, "mcp_tools_used": list(self.mcp_tools_used)}
 
 
-# Heuristic: recursively walk any JSON structure pulling token/cost/tool signals.
+def _event_tool_name(ev: dict[str, Any]) -> str:
+    """Extract the tool name from an event, checking both top-level and nested part."""
+    return str(
+        ev.get("tool") or ev.get("name")
+        or ev.get("part", {}).get("tool")
+        or ""
+    )
 
-def _walk_usage(obj: Any, m: Metrics, _parent_key: str = "") -> None:
-    if isinstance(obj, dict):
-        if _parent_key == "usage":
-            if "tokens" in obj and isinstance(obj["tokens"], dict):
-                t = obj["tokens"]
-                m.input_tokens += _as_int(t.get("input"))
-                m.output_tokens += _as_int(t.get("output"))
-                m.reasoning_tokens += _as_int(t.get("reasoning"))
-            if "cost" in obj and isinstance(obj.get("cost"), (int, float)):
-                m.cost_usd += float(obj["cost"])
-        for k, v in obj.items():
-            _walk_usage(v, m, _parent_key=k)
-    elif isinstance(obj, list):
-        for v in obj:
-            _walk_usage(v, m, _parent_key=_parent_key)
+
+def _is_mcp_tool(name: str, hint_set: frozenset[str]) -> bool:
+    """Match bare names (search_code) and prefixed names (codebase-memory_search_code)."""
+    if name in hint_set:
+        return True
+    for hint in hint_set:
+        if name.endswith(f"_{hint}"):
+            return True
+    return False
 
 
 def _as_int(v: Any) -> int:
@@ -360,39 +359,36 @@ def _as_int(v: Any) -> int:
 
 def extract_metrics(
     run: RunResult,
-    export_path: Path | None,
     mcp_tool_names: list[str],
 ) -> Metrics:
-    """Combine wall-clock (from run) + token/cost (from export, authoritative)
-    + tool-call counts (from the event stream)."""
+    """Extract wall-clock, tokens, and tool-call counts from the event stream."""
     m = Metrics(wall_seconds=round(run.wall_seconds, 2), timed_out=run.timed_out)
 
-    # --- tool calls + turns + errors from the JSONL event stream ---
     hint_set = frozenset(mcp_tool_names) if mcp_tool_names else frozenset()
     for ev in iter_events(run.events_path):
         etype = str(ev.get("type", ""))
+
         if etype == "error" or ev.get("error"):
             m.errored = True
             err = ev.get("error") or {}
             if isinstance(err, dict):
                 data = err.get("data") or {}
                 m.error_message = str(data.get("message") or err.get("name") or m.error_message)
+
         if "tool" in etype.lower():
             m.tool_calls += 1
-            name = str(ev.get("tool") or ev.get("name") or "")
-            if name in hint_set:
+            name = _event_tool_name(ev)
+            if name and _is_mcp_tool(name, hint_set):
                 m.mcp_tool_calls += 1
                 if name not in m.mcp_tools_used:
                     m.mcp_tools_used.append(name)
-        if etype in ("assistant", "step-finish"):
-            m.assistant_turns += 1
 
-    # --- authoritative tokens/cost from export.json if available ---
-    if export_path and export_path.exists():
-        try:
-            _walk_usage(json.loads(export_path.read_text()), m)
-        except Exception:
-            pass
+        if etype == "step_finish":
+            m.assistant_turns += 1
+            tokens = ev.get("part", {}).get("tokens", {})
+            m.input_tokens += _as_int(tokens.get("input"))
+            m.output_tokens += _as_int(tokens.get("output"))
+            m.reasoning_tokens += _as_int(tokens.get("reasoning"))
 
     if run.returncode != 0 and not m.errored:
         m.errored = True
@@ -404,23 +400,36 @@ def extract_metrics(
 # ---------------------------------------------------------------------------
 # Session process summary (for the LLM judge)
 # ---------------------------------------------------------------------------
-_READ_TOOLS = frozenset({"read_file", "readFile", "Read", "cat", "view_file"})
+_READ_TOOLS = frozenset({"read_file", "readFile", "Read", "read", "cat", "view_file"})
 _WRITE_TOOLS = frozenset({
-    "write_file", "writeFile", "Write", "edit_file", "editFile", "Edit",
+    "write_file", "writeFile", "Write", "write",
+    "edit_file", "editFile", "Edit", "edit",
     "patch", "replace_in_file", "insert_code",
 })
-_PATH_KEYS = ("path", "file", "filePath", "file_path", "filename", "target")
+_PATH_KEYS = ("path", "file", "filePath", "file_path", "filename", "target", "pattern")
 MAX_TRAJECTORY = 50
 
 
 def _extract_file_path(ev: dict[str, Any]) -> str:
-    """Best-effort extraction of a file path from a tool-call event."""
-    for container in (ev.get("input"), ev.get("args"), ev.get("arguments"), ev):
+    """Best-effort extraction of a file path from a tool-call event.
+
+    Returns workspace-relative path when possible (strips .../workspace/ prefix).
+    """
+    containers = [
+        ev.get("input"),
+        ev.get("args"),
+        ev.get("arguments"),
+        ev.get("part", {}).get("state", {}).get("input"),
+        ev,
+    ]
+    for container in containers:
         if not isinstance(container, dict):
             continue
         for k in _PATH_KEYS:
             v = container.get(k)
             if isinstance(v, str) and v:
+                if "/workspace/" in v:
+                    v = v.split("/workspace/", 1)[1]
                 return v
     return ""
 
@@ -435,7 +444,7 @@ def summarize_session_process(events_path: Path, metrics: Metrics) -> str:
         etype = str(ev.get("type", ""))
         if "tool" not in etype.lower():
             continue
-        name = str(ev.get("tool") or ev.get("name") or "")
+        name = _event_tool_name(ev)
         if not name:
             continue
         fpath = _extract_file_path(ev)

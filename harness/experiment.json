@@ -4,7 +4,7 @@
   "models": [
     { "slug": "mistral-small-4-119b", "id": "nvidia/mistralai/mistral-small-4-119b-2603" },
     { "slug": "gpt-oss-120b",     "id": "nvidia/openai/gpt-oss-120b" },
-    { "slug": "nemotron-3-ultra", "id": "nvidia/nvidia/nemotron-3-ultra-550b-a55b" }
+    { "slug": "llama-4-maverick-17b", "id": "nvidia/meta/llama-4-maverick-17b-128e-instruct" }
   ],
 
   "configs": ["control", "codebase-memory", "codegraphcontext"],
@@ -12,7 +12,7 @@
   "reps": 3,
 
   "//judge_model": "Neutral grader, NOT one of the models under test (avoid self-eval bias). deepseek-v4-pro is strong and not in the matrix.",
-  "judge_model": "nvidia/deepseek-ai/deepseek-v4-pro",
+  "judge_model": "opencode/mimo-v2.5-free",
 
   "//timeout_seconds": "Hard wall-clock cap per session; a hung/looping run is killed and recorded as errored rather than blocking the batch.",
   "timeout_seconds": 900,

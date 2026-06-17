@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -142,7 +142,7 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
 
     (cell_dir / "diff.patch").write_text(lib.git_diff(workdir))
 
-    metrics = lib.extract_metrics(run, export_path, ALL_MCP_TOOL_NAMES)
+    metrics = lib.extract_metrics(run, ALL_MCP_TOOL_NAMES)
     metrics_d = metrics.asdict()
     metrics_d.update(model=model["slug"], model_id=model["id"], config=config_name,
                      task=task["id"], rep=rep, session_id=run.session_id,
@@ -191,7 +191,7 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
 
     status = "ERR" if metrics.errored else ("TIMEOUT" if metrics.timed_out else "ok")
     print(f"     {status}  {metrics.wall_seconds}s  task_score={metrics_d.get('task_score', '-')} "
-          f"in={metrics.input_tokens} out={metrics.output_tokens} cost=${metrics.cost_usd:.4f} "
+          f"in={metrics.input_tokens} out={metrics.output_tokens} "
           f"tools={metrics.tool_calls} mcp={metrics.mcp_tool_calls} judge={judge_d.get('overall', '-')}",
           flush=True)
 
@@ -212,7 +212,8 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=exp["reps"])
     ap.add_argument("--dry-run-one", action="store_true", help="run a single cell and stop")
     ap.add_argument("--no-judge", action="store_true")
-    ap.add_argument("--parallel", type=int, default=1, help="max concurrent cells")
+    ap.add_argument("--parallel", action="store_true",
+                    help="run models in parallel (one thread per model, serialized within)")
     args = ap.parse_args()
 
     try:
@@ -237,31 +238,39 @@ def main() -> int:
     print(f"Matrix: {len(models)} models x {len(configs)} configs x {len(tasks)} tasks x "
           f"{len(reps)} reps = {len(cells)} sessions -> {run_root}")
 
-    rows: list[dict] = []
-    if args.parallel > 1:
-        rows_lock = threading.Lock()
-        counter = [0]
+    # Group cells by model so we serialize per-model (avoids 429s) but run
+    # different models in parallel (rate limits are per-endpoint).
+    by_model: dict[str, list] = defaultdict(list)
+    for m, c, t, r in cells:
+        by_model[m["slug"]].append((m, c, t, r))
 
-        def _run_one(m, c, t, r):
+    rows: list[dict] = []
+    rows_lock = threading.Lock()
+    counter = [0]
+
+    def _run_model_queue(queue):
+        for m, c, t, r in queue:
             with rows_lock:
                 counter[0] += 1
                 n = counter[0]
             print(f"[{n}/{len(cells)}]", flush=True)
-            return run_cell(m, c, t, r, run_root, mcp_runtime, exp, do_judge=not args.no_judge)
+            row = run_cell(m, c, t, r, run_root, mcp_runtime, exp,
+                           do_judge=not args.no_judge)
+            with rows_lock:
+                rows.append(row)
+                (run_root / "index.json").write_text(json.dumps(rows, indent=2))
 
-        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
-            futures = {pool.submit(_run_one, m, c, t, r): i
-                       for i, (m, c, t, r) in enumerate(cells)}
-            for fut in as_completed(futures):
-                row = fut.result()
-                with rows_lock:
-                    rows.append(row)
-                    (run_root / "index.json").write_text(json.dumps(rows, indent=2))
+    if args.parallel and len(by_model) > 1:
+        threads = []
+        for queue in by_model.values():
+            t = threading.Thread(target=_run_model_queue, args=(queue,))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
     else:
-        for i, (m, c, t, r) in enumerate(cells, 1):
-            print(f"[{i}/{len(cells)}]", flush=True)
-            rows.append(run_cell(m, c, t, r, run_root, mcp_runtime, exp, do_judge=not args.no_judge))
-            (run_root / "index.json").write_text(json.dumps(rows, indent=2))
+        for queue in by_model.values():
+            _run_model_queue(queue)
 
     print(f"\nDone. {len(rows)} cells. Aggregate with:\n  python harness/aggregate.py {run_root}")
     return 0

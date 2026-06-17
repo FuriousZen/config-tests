@@ -25,7 +25,6 @@ METRICS = [
     ("judge_process_efficiency", "Judge process efficiency (1-5)", True),
     ("wall_seconds", "Wall seconds", False),
     ("total_tokens", "Total tokens", False),
-    ("cost_usd", "Cost USD", False),
     ("tool_calls", "Tool calls", False),
     ("mcp_tool_calls", "MCP tool calls", True),
 ]
