@@ -64,7 +64,7 @@ def _run_static_check(workdir: Path, check: dict) -> bool:
     """check = {pattern, mode: must_exist|must_not_exist, glob}."""
     pattern = re.compile(check["pattern"])
     found = False
-    for f in workdir.glob(check.get("glob", "**/*")):
+    for f in workdir.glob(check.get("glob", "app/**/*")):
         if not f.is_file() or "node_modules" in f.parts or ".git" in f.parts:
             continue
         try:

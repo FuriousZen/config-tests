@@ -61,8 +61,21 @@ def write_csv(rows: list[dict], out: Path) -> None:
             w.writerow(r)
 
 
+# Score metrics: errored sessions count as 0 so error-prone configs can't
+# appear artificially better by excluding their failures.
+_SCORE_METRICS = {"task_score", "judge_overall", "verify_typecheck"}
+
+
 def _nums(rows, key):
-    return [float(r[key]) for r in rows if isinstance(r.get(key), (int, float))]
+    treat_none_as = 0 if key in _SCORE_METRICS else None
+    vals = []
+    for r in rows:
+        v = r.get(key)
+        if isinstance(v, (int, float)):
+            vals.append(float(v))
+        elif v is None and treat_none_as is not None:
+            vals.append(float(treat_none_as))
+    return vals
 
 
 def _cell_stat(rows, model, config, key):
@@ -108,8 +121,22 @@ def write_md(rows: list[dict], out: Path, exp: dict) -> None:
             lines.append(f"| {model} | " + " | ".join(cells) + f" | {best_cfg or '–'} |")
         lines.append("")
 
+    # Error rate table
+    lines += ["## Error rate", "",
+              "| model \\ config | " + " | ".join(configs) + " |",
+              "|" + "---|" * (len(configs) + 1)]
+    for model in models:
+        cells_row = []
+        for cfg in configs:
+            cell_rows = [r for r in rows if r.get("model") == model and r.get("config") == cfg]
+            n_err = sum(1 for r in cell_rows if r.get("errored"))
+            cells_row.append(f"{n_err}/{len(cell_rows)}")
+        lines.append(f"| {model} | " + " | ".join(cells_row) + " |")
+    lines.append("")
+
     lines += ["---", "_Lift % is each MCP config vs. its own `control` row; ✓ marks a",
-              "meaningful improvement in the right direction (>1%)._"]
+              "meaningful improvement in the right direction (>1%). Score metrics treat",
+              "errored sessions as 0._"]
     out.write_text("\n".join(lines))
 
 

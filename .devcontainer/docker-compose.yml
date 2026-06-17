@@ -1,29 +1,8 @@
 services:
   app:
     image: mcr.microsoft.com/devcontainers/base:1-bookworm
-    # Keep the container alive; VS Code attaches and runs your tooling inside it.
     command: sleep infinity
     volumes:
       - ../..:/workspaces:cached
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/app
-      # NIM key for opencode. Sourced from the host shell env or
-      # .devcontainer/.env (gitignored). Consumed by harness/setup_auth.sh.
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
-    depends_on:
-      - db
-
-  db:
-    image: postgres:16-bookworm
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: app
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-volumes:
-  pgdata:

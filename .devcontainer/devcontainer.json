@@ -1,6 +1,5 @@
 {
-  "name": "fullstack",
-  // Multi-container setup: app + postgres (see docker-compose.yml).
+  "name": "experimentation",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
@@ -19,10 +18,7 @@
   // Experiment harness bootstrap: install the opencode CLI, provision the NIM
   // credential (from $NVIDIA_API_KEY -> opencode auth.json, no /connect needed),
   // install the react-app fixture deps, then install the two MCP servers.
-  "postCreateCommand": "corepack enable; npm install -g opencode-ai; bash harness/setup_auth.sh; (cd fixtures/react-app && npm install); python3 harness/setup_mcps.py || true",
-
-  // App dev ports + postgres.
-  "forwardPorts": [3000, 5173, 8000, 5432],
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
 
   "customizations": {
     "vscode": {
@@ -31,7 +27,9 @@
         "ms-python.vscode-pylance",
         "charliermarsh.ruff",
         "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode"
+        "esbenp.prettier-vscode",
+        "sst-dev.opencode",
+        "anthropic.claude-code"
       ],
       "settings": {
         "editor.formatOnSave": true

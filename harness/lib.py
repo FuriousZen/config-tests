@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,7 +75,10 @@ def build_opencode_config(
         "codebase-memory": {"CBM_CACHE_DIR": str(workdir / ".cbm-cache")},
         # codegraphcontext documents no data-dir override, so isolate everything it
         # writes under ~/ (embedded FalkorDB/Kuzu DB + ~/.codegraphcontext) via HOME.
-        "codegraphcontext": {"HOME": str(workdir / ".cgc-home")},
+        "codegraphcontext": {
+            "HOME": str(workdir / ".cgc-home"),
+            "GIT_CONFIG_GLOBAL": str(Path.home() / ".gitconfig"),
+        },
     }
     mcp: dict[str, Any] = {}
     for key in MCP_KEYS:
@@ -156,6 +160,62 @@ def git_diff(workdir: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Session environment isolation
+# ---------------------------------------------------------------------------
+_ENV_PASSTHROUGH = frozenset({
+    "PATH", "HOME", "NVIDIA_API_KEY", "TERM", "LANG", "LC_ALL",
+    "USER", "LOGNAME", "SHELL", "TMPDIR",
+})
+
+
+def _seed_auth(xdg_data: Path) -> None:
+    """Copy the real NIM auth.json into an isolated XDG_DATA_HOME so opencode
+    can authenticate without seeing the global config/state dirs."""
+    real_data = Path(os.environ.get(
+        "XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    real_auth = real_data / "opencode" / "auth.json"
+    if not real_auth.exists():
+        return
+    dst = xdg_data / "opencode"
+    dst.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(real_auth, dst / "auth.json")
+
+
+def build_session_env(cell_dir: Path) -> dict[str, str]:
+    """Build a minimal, isolated environment for an opencode subprocess.
+
+    Sets per-cell XDG dirs so the global ~/.config/opencode (which may register
+    extra MCP servers or AGENTS.md) and ~/.local/share/opencode (session DB)
+    never leak into the experiment session.
+    """
+    env = {k: v for k, v in os.environ.items() if k in _ENV_PASSTHROUGH}
+    xdg_config = cell_dir / ".xdg-config"
+    xdg_data = cell_dir / ".xdg-data"
+    xdg_cache = cell_dir / ".xdg-cache"
+    xdg_state = cell_dir / ".xdg-state"
+    for d in (xdg_config, xdg_data, xdg_cache, xdg_state):
+        d.mkdir(parents=True, exist_ok=True)
+    _seed_auth(xdg_data)
+    env["XDG_CONFIG_HOME"] = str(xdg_config)
+    env["XDG_DATA_HOME"] = str(xdg_data)
+    env["XDG_CACHE_HOME"] = str(xdg_cache)
+    env["XDG_STATE_HOME"] = str(xdg_state)
+    return env
+
+
+def build_judge_env(tmpdir: str) -> dict[str, str]:
+    """Minimal isolated environment for the LLM-judge subprocess."""
+    env = {k: v for k, v in os.environ.items() if k in _ENV_PASSTHROUGH}
+    base = Path(tmpdir)
+    for name in ("config", "data", "cache", "state"):
+        d = base / f".xdg-{name}"
+        d.mkdir(parents=True, exist_ok=True)
+        env[f"XDG_{name.upper()}_HOME"] = str(d)
+    _seed_auth(base / ".xdg-data")
+    return env
+
+
+# ---------------------------------------------------------------------------
 # Running opencode
 # ---------------------------------------------------------------------------
 @dataclass
@@ -174,6 +234,7 @@ def run_opencode_session(
     workdir: Path,
     out_events: Path,
     timeout_seconds: int,
+    session_env: dict[str, str] | None = None,
     extra_args: list[str] | None = None,
 ) -> RunResult:
     """Run one headless `opencode run` session, streaming JSONL events to disk."""
@@ -189,7 +250,8 @@ def run_opencode_session(
     start = time.monotonic()
     timed_out = False
     with out_events.open("wb") as ev:
-        proc = subprocess.Popen(cmd, stdout=ev, stderr=subprocess.PIPE, cwd=str(workdir))
+        proc = subprocess.Popen(cmd, stdout=ev, stderr=subprocess.PIPE,
+                                cwd=str(workdir), env=session_env)
         try:
             _, stderr = proc.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
@@ -265,7 +327,7 @@ class Metrics:
     mcp_tools_used: list[str] = field(default_factory=list)
 
     def asdict(self) -> dict[str, Any]:
-        return self.__dict__
+        return {**self.__dict__, "mcp_tools_used": list(self.mcp_tools_used)}
 
 
 # Heuristic: recursively walk any JSON structure pulling token/cost/tool signals.
@@ -274,21 +336,21 @@ _TOKEN_KEYS_OUT = {"output", "output_tokens", "completion_tokens", "completionTo
 _TOKEN_KEYS_REASON = {"reasoning", "reasoning_tokens", "reasoningTokens"}
 
 
-def _walk_usage(obj: Any, m: Metrics) -> None:
+def _walk_usage(obj: Any, m: Metrics, _parent_key: str = "") -> None:
     if isinstance(obj, dict):
-        # token usage blocks
-        if "tokens" in obj and isinstance(obj["tokens"], dict):
-            t = obj["tokens"]
-            m.input_tokens += _as_int(t.get("input"))
-            m.output_tokens += _as_int(t.get("output"))
-            m.reasoning_tokens += _as_int(t.get("reasoning"))
-        if "cost" in obj and isinstance(obj.get("cost"), (int, float)):
-            m.cost_usd += float(obj["cost"])
+        if _parent_key == "usage":
+            if "tokens" in obj and isinstance(obj["tokens"], dict):
+                t = obj["tokens"]
+                m.input_tokens += _as_int(t.get("input"))
+                m.output_tokens += _as_int(t.get("output"))
+                m.reasoning_tokens += _as_int(t.get("reasoning"))
+            if "cost" in obj and isinstance(obj.get("cost"), (int, float)):
+                m.cost_usd += float(obj["cost"])
         for k, v in obj.items():
-            _walk_usage(v, m)
+            _walk_usage(v, m, _parent_key=k)
     elif isinstance(obj, list):
         for v in obj:
-            _walk_usage(v, m)
+            _walk_usage(v, m, _parent_key=_parent_key)
 
 
 def _as_int(v: Any) -> int:
@@ -301,14 +363,14 @@ def _as_int(v: Any) -> int:
 def extract_metrics(
     run: RunResult,
     export_path: Path | None,
-    mcp_tool_name_hints: list[str],
+    mcp_tool_names: list[str],
 ) -> Metrics:
     """Combine wall-clock (from run) + token/cost (from export, authoritative)
     + tool-call counts (from the event stream)."""
     m = Metrics(wall_seconds=round(run.wall_seconds, 2), timed_out=run.timed_out)
 
     # --- tool calls + turns + errors from the JSONL event stream ---
-    hint_re = re.compile("|".join(re.escape(h) for h in mcp_tool_name_hints)) if mcp_tool_name_hints else None
+    hint_set = frozenset(mcp_tool_names) if mcp_tool_names else frozenset()
     for ev in iter_events(run.events_path):
         etype = str(ev.get("type", ""))
         if etype == "error" or ev.get("error"):
@@ -320,11 +382,11 @@ def extract_metrics(
         if "tool" in etype.lower():
             m.tool_calls += 1
             name = str(ev.get("tool") or ev.get("name") or "")
-            if hint_re and hint_re.search(name):
+            if name in hint_set:
                 m.mcp_tool_calls += 1
                 if name not in m.mcp_tools_used:
                     m.mcp_tools_used.append(name)
-        if etype in ("message", "assistant", "step-finish", "message.updated"):
+        if etype in ("assistant", "step-finish"):
             m.assistant_turns += 1
 
     # --- authoritative tokens/cost from export.json if available ---

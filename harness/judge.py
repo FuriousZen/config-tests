@@ -9,10 +9,11 @@ model or MCP config produced them — and returns a strict-JSON rubric score.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+import lib
 
 RUBRIC = """You are a strict, impartial code-review judge. You are given a coding TASK and
 the RESULT a coding agent produced (a unified diff, plus the agent's final
@@ -56,12 +57,44 @@ def final_agent_message(export_path: Path | None) -> str:
 
 
 def _extract_json(text: str) -> dict:
-    # Grab the last {...} block the judge emitted.
-    matches = re.findall(r"\{.*?\}", text, re.DOTALL)
-    for blob in reversed(matches):
+    """Extract the last valid JSON object containing 'overall' from text.
+
+    Uses brace-depth counting so nested objects like
+    {"a": {"b": 1}, "overall": 5} are matched correctly.
+    """
+    candidates: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "{":
+            depth = 0
+            in_string = False
+            escape_next = False
+            for j in range(i, len(text)):
+                c = text[j]
+                if escape_next:
+                    escape_next = False
+                    continue
+                if c == "\\" and in_string:
+                    escape_next = True
+                    continue
+                if c == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(text[i : j + 1])
+                        i = j
+                        break
+        i += 1
+    for blob in reversed(candidates):
         try:
             d = json.loads(blob)
-            if "overall" in d:
+            if isinstance(d, dict) and "overall" in d:
                 return d
         except json.JSONDecodeError:
             continue
@@ -88,10 +121,11 @@ def judge_run(task: dict, diff_text: str, export_path: Path | None,
 
     with tempfile.TemporaryDirectory() as td:
         try:
+            judge_env = lib.build_judge_env(td)
             res = subprocess.run(
                 ["opencode", "run", message, "-m", judge_model,
                  "--pure", "--dangerously-skip-permissions", "--dir", td],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True, timeout=300, env=judge_env,
             )
             verdict = _extract_json(res.stdout)
         except Exception as e:

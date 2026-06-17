@@ -24,13 +24,38 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 import lib
 import verify
 from judge import judge_run, final_agent_message
+
+# ---------------------------------------------------------------------------
+# Exact MCP tool names (from upstream docs) for accurate detection.
+# ---------------------------------------------------------------------------
+MCP_TOOL_NAMES: dict[str, list[str]] = {
+    "codebase-memory": [
+        "index_repository", "search_graph", "query_graph", "trace_path",
+        "trace_call_path", "search_code", "get_code_snippet", "get_architecture",
+        "get_graph_schema", "index_status", "list_projects", "detect_changes",
+        "manage_adr", "ingest_traces",
+    ],
+    "codegraphcontext": [
+        "add_code_to_graph", "check_job_status", "list_jobs", "find_code",
+        "analyze_code_relationships", "watch_directory", "execute_cypher_query",
+        "add_package_to_graph", "find_dead_code", "calculate_cyclomatic_complexity",
+        "find_most_complex_functions", "list_indexed_repositories", "delete_repository",
+        "visualize_graph_query", "list_watched_paths", "unwatch_directory",
+        "load_bundle", "search_registry_bundles", "get_repository_stats",
+        "discover_codegraph_contexts", "switch_context", "generate_report",
+        "find_java_spring_endpoints", "find_java_spring_beans", "find_datasource_nodes",
+    ],
+}
+ALL_MCP_TOOL_NAMES: list[str] = [n for names in MCP_TOOL_NAMES.values() for n in names]
 
 
 def load_tasks() -> list[dict]:
@@ -101,12 +126,14 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
         index_status = pre_index(config_name, workdir, mcp_runtime)
 
     print(f"  -> {cell_id}  (pre-index: {index_status})", flush=True)
+    session_env = lib.build_session_env(cell_dir)
     run = lib.run_opencode_session(
         message=task["prompt"],
         model=model["id"],
         workdir=workdir,
         out_events=cell_dir / "events.json",
         timeout_seconds=exp.get("timeout_seconds", 900),
+        session_env=session_env,
     )
 
     export_path = cell_dir / "export.json"
@@ -115,21 +142,22 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
 
     (cell_dir / "diff.patch").write_text(lib.git_diff(workdir))
 
-    # Substrings that flag an MCP-provided tool call (from both servers' docs).
-    mcp_hints = [
-        "codebase-memory", "codegraphcontext",
-        # codebase-memory tool names
-        "index_repository", "search_graph", "query_graph", "trace_path",
-        "search_code", "get_code_snippet", "get_architecture", "get_graph_schema",
-        "index_status", "list_projects",
-        # codegraphcontext / generic graph-nav signals
-        "graph", "callers", "find_", "memory", "query",
-    ]
-    metrics = lib.extract_metrics(run, export_path, mcp_hints)
+    metrics = lib.extract_metrics(run, export_path, ALL_MCP_TOOL_NAMES)
     metrics_d = metrics.asdict()
     metrics_d.update(model=model["slug"], model_id=model["id"], config=config_name,
                      task=task["id"], rep=rep, session_id=run.session_id,
                      pre_index=index_status)
+
+    # Post-session isolation check
+    iso_warn = None
+    if not metrics.errored:
+        if config_name in ("codebase-memory", "codegraphcontext") and metrics.mcp_tool_calls == 0:
+            iso_warn = f"MCP config '{config_name}' produced 0 MCP tool calls — server may not have loaded"
+        elif config_name == "control" and metrics.mcp_tool_calls > 0:
+            iso_warn = f"control produced {metrics.mcp_tool_calls} MCP tool calls — isolation may be broken"
+    if iso_warn:
+        print(f"     ⚠ ISOLATION: {iso_warn}", flush=True)
+        metrics_d["isolation_warning"] = iso_warn
 
     # --- execution-based ground truth (headline score) ---
     # Runs after the diff is captured; hidden tests land in a gitignored dir.
@@ -181,6 +209,7 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=exp["reps"])
     ap.add_argument("--dry-run-one", action="store_true", help="run a single cell and stop")
     ap.add_argument("--no-judge", action="store_true")
+    ap.add_argument("--parallel", type=int, default=1, help="max concurrent cells")
     args = ap.parse_args()
 
     try:
@@ -205,11 +234,31 @@ def main() -> int:
     print(f"Matrix: {len(models)} models x {len(configs)} configs x {len(tasks)} tasks x "
           f"{len(reps)} reps = {len(cells)} sessions -> {run_root}")
 
-    rows = []
-    for i, (m, c, t, r) in enumerate(cells, 1):
-        print(f"[{i}/{len(cells)}]", flush=True)
-        rows.append(run_cell(m, c, t, r, run_root, mcp_runtime, exp, do_judge=not args.no_judge))
-        (run_root / "index.json").write_text(json.dumps(rows, indent=2))
+    rows: list[dict] = []
+    if args.parallel > 1:
+        rows_lock = threading.Lock()
+        counter = [0]
+
+        def _run_one(m, c, t, r):
+            with rows_lock:
+                counter[0] += 1
+                n = counter[0]
+            print(f"[{n}/{len(cells)}]", flush=True)
+            return run_cell(m, c, t, r, run_root, mcp_runtime, exp, do_judge=not args.no_judge)
+
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            futures = {pool.submit(_run_one, m, c, t, r): i
+                       for i, (m, c, t, r) in enumerate(cells)}
+            for fut in as_completed(futures):
+                row = fut.result()
+                with rows_lock:
+                    rows.append(row)
+                    (run_root / "index.json").write_text(json.dumps(rows, indent=2))
+    else:
+        for i, (m, c, t, r) in enumerate(cells, 1):
+            print(f"[{i}/{len(cells)}]", flush=True)
+            rows.append(run_cell(m, c, t, r, run_root, mcp_runtime, exp, do_judge=not args.no_judge))
+            (run_root / "index.json").write_text(json.dumps(rows, indent=2))
 
     print(f"\nDone. {len(rows)} cells. Aggregate with:\n  python harness/aggregate.py {run_root}")
     return 0
