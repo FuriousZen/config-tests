@@ -15,18 +15,24 @@ from pathlib import Path
 
 import lib
 
-RUBRIC = """You are a strict, impartial code-review judge. You are given a coding TASK and
+RUBRIC = """You are a strict, impartial code-review judge. You are given a coding TASK,
 the RESULT a coding agent produced (a unified diff, plus the agent's final
-message). Score the RESULT on each axis from 1 (poor) to 5 (excellent):
+message), and a SESSION PROCESS log showing every tool call the agent made.
+Score the RESULT on each axis from 1 (poor) to 5 (excellent):
 
 - correctness:  Does the change actually do what the task asked, without bugs?
 - completeness: Are all parts of the task addressed (edge cases, tests if asked)?
 - efficiency:   Is the solution focused and clean (no needless churn or detours)?
+- process_efficiency: Did the agent navigate the codebase efficiently? Penalize
+  excessive file reads, re-reading the same files, reading irrelevant files,
+  hallucinating file paths, high token burn relative to task complexity, and
+  unfocused exploration. Reward targeted reads, minimal backtracking, and
+  efficient context use.
 
 Then give an overall score 1-5 and a one-sentence rationale.
 
 Respond with ONLY a single JSON object, no prose before or after:
-{"correctness": <1-5>, "completeness": <1-5>, "efficiency": <1-5>, "overall": <1-5>, "rationale": "<one sentence>"}
+{"correctness": <1-5>, "completeness": <1-5>, "efficiency": <1-5>, "process_efficiency": <1-5>, "overall": <1-5>, "rationale": "<one sentence>"}
 """
 
 MAX_DIFF_CHARS = 24000
@@ -102,7 +108,8 @@ def _extract_json(text: str) -> dict:
 
 
 def judge_run(task: dict, diff_text: str, export_path: Path | None,
-              judge_model: str, out_path: Path, verify_summary: str = "") -> dict:
+              judge_model: str, out_path: Path, verify_summary: str = "",
+              process_summary: str = "") -> dict:
     diff = diff_text if len(diff_text) <= MAX_DIFF_CHARS else diff_text[:MAX_DIFF_CHARS] + "\n…[diff truncated]…"
     final_msg = final_agent_message(export_path)
     rubric_extra = task.get("rubric", "")
@@ -110,11 +117,14 @@ def judge_run(task: dict, diff_text: str, export_path: Path | None,
     # Ground the judge in deterministic results so it can't praise broken code.
     ground = (f"==== GROUND TRUTH (trust this over your own reading) ====\n{verify_summary}\n\n"
               if verify_summary else "")
+    process = (f"==== SESSION PROCESS ====\n{process_summary}\n\n"
+               if process_summary else "")
     message = (
         f"{RUBRIC}\n"
         f"{('Extra rubric guidance for this task: ' + rubric_extra) if rubric_extra else ''}\n\n"
         f"==== TASK ====\n{task['title']}\n\n{task['prompt']}\n\n"
         f"{ground}"
+        f"{process}"
         f"==== RESULT: AGENT FINAL MESSAGE ====\n{final_msg or '(none)'}\n\n"
         f"==== RESULT: DIFF ====\n{diff or '(no changes were made)'}\n"
     )

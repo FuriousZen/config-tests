@@ -138,7 +138,7 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
 
     export_path = cell_dir / "export.json"
     if run.session_id:
-        lib.export_session(run.session_id, export_path)
+        lib.export_session(run.session_id, export_path, session_env=session_env)
 
     (cell_dir / "diff.patch").write_text(lib.git_diff(workdir))
 
@@ -172,6 +172,8 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
                                 "answer_key", "skipped")}
     (cell_dir / "metrics.json").write_text(json.dumps(metrics_d, indent=2))
 
+    process_summary = lib.summarize_session_process(run.events_path, metrics)
+
     judge_d = {}
     if do_judge and not metrics.errored:
         judge_d = judge_run(
@@ -181,6 +183,7 @@ def run_cell(model: dict, config_name: str, task: dict, rep: int,
             judge_model=exp["judge_model"],
             out_path=cell_dir / "judge.json",
             verify_summary=verify.summarize_for_judge(verify_d),
+            process_summary=process_summary,
         )
     elif metrics.errored:
         (cell_dir / "judge.json").write_text(json.dumps(

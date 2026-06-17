@@ -293,12 +293,14 @@ def _first_session_id(events_path: Path) -> str | None:
     return None
 
 
-def export_session(session_id: str, out_path: Path) -> bool:
+def export_session(session_id: str, out_path: Path,
+                   session_env: dict[str, str] | None = None) -> bool:
     """`opencode export <id>` -> authoritative session JSON. Returns success."""
     try:
         res = subprocess.run(
             ["opencode", "export", session_id],
             capture_output=True, text=True, timeout=120,
+            env=session_env,
         )
         if res.returncode == 0 and res.stdout.strip():
             out_path.write_text(res.stdout)
@@ -331,10 +333,6 @@ class Metrics:
 
 
 # Heuristic: recursively walk any JSON structure pulling token/cost/tool signals.
-_TOKEN_KEYS_IN = {"input", "input_tokens", "prompt_tokens", "promptTokens"}
-_TOKEN_KEYS_OUT = {"output", "output_tokens", "completion_tokens", "completionTokens"}
-_TOKEN_KEYS_REASON = {"reasoning", "reasoning_tokens", "reasoningTokens"}
-
 
 def _walk_usage(obj: Any, m: Metrics, _parent_key: str = "") -> None:
     if isinstance(obj, dict):
@@ -401,3 +399,84 @@ def extract_metrics(
         if not m.error_message:
             m.error_message = (run.stderr or "").strip()[-500:] or f"exit {run.returncode}"
     return m
+
+
+# ---------------------------------------------------------------------------
+# Session process summary (for the LLM judge)
+# ---------------------------------------------------------------------------
+_READ_TOOLS = frozenset({"read_file", "readFile", "Read", "cat", "view_file"})
+_WRITE_TOOLS = frozenset({
+    "write_file", "writeFile", "Write", "edit_file", "editFile", "Edit",
+    "patch", "replace_in_file", "insert_code",
+})
+_PATH_KEYS = ("path", "file", "filePath", "file_path", "filename", "target")
+MAX_TRAJECTORY = 50
+
+
+def _extract_file_path(ev: dict[str, Any]) -> str:
+    """Best-effort extraction of a file path from a tool-call event."""
+    for container in (ev.get("input"), ev.get("args"), ev.get("arguments"), ev):
+        if not isinstance(container, dict):
+            continue
+        for k in _PATH_KEYS:
+            v = container.get(k)
+            if isinstance(v, str) and v:
+                return v
+    return ""
+
+
+def summarize_session_process(events_path: Path, metrics: Metrics) -> str:
+    """Build a compact text summary of the agent's tool-call trajectory."""
+    trajectory: list[str] = []
+    read_counts: dict[str, int] = {}
+    write_counts: dict[str, int] = {}
+
+    for ev in iter_events(events_path):
+        etype = str(ev.get("type", ""))
+        if "tool" not in etype.lower():
+            continue
+        name = str(ev.get("tool") or ev.get("name") or "")
+        if not name:
+            continue
+        fpath = _extract_file_path(ev)
+        entry = f"{name} → {fpath}" if fpath else name
+
+        if name in _READ_TOOLS and fpath:
+            read_counts[fpath] = read_counts.get(fpath, 0) + 1
+            if read_counts[fpath] > 1:
+                entry += "  [re-read]"
+        elif name in _WRITE_TOOLS and fpath:
+            write_counts[fpath] = write_counts.get(fpath, 0) + 1
+
+        trajectory.append(entry)
+
+    lines = [
+        "Session process:",
+        f"  Duration: {metrics.wall_seconds:.0f}s | "
+        f"Tokens: {metrics.input_tokens:,} in / {metrics.output_tokens:,} out | "
+        f"Tool calls: {metrics.tool_calls} | Turns: {metrics.assistant_turns}",
+        "",
+    ]
+
+    if trajectory:
+        lines.append("  Tool trajectory:")
+        if len(trajectory) <= MAX_TRAJECTORY:
+            for i, t in enumerate(trajectory, 1):
+                lines.append(f"  {i}. {t}")
+        else:
+            half = MAX_TRAJECTORY // 2
+            for i, t in enumerate(trajectory[:half], 1):
+                lines.append(f"  {i}. {t}")
+            lines.append(f"  [...{len(trajectory) - MAX_TRAJECTORY} omitted...]")
+            for i, t in enumerate(trajectory[-half:], len(trajectory) - half + 1):
+                lines.append(f"  {i}. {t}")
+        lines.append("")
+
+    total_reads = sum(read_counts.values())
+    re_reads = total_reads - len(read_counts)
+    lines.append(
+        f"  Files read: {len(read_counts)} unique"
+        f" ({total_reads} total reads, {re_reads} re-reads)"
+    )
+    lines.append(f"  Files written/edited: {len(write_counts)} unique")
+    return "\n".join(lines)
